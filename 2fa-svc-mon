@@ -1,0 +1,72 @@
+#!/bin/bash
+
+# NAME
+# 2fa-svc-mon - update /etc/2fa/<service>-users following a user 2FA preference
+#               change
+
+# SYNOPSIS
+# <b>sudo</b> <b>2fa-svc-mon</b>
+# <b>2fa-svc-mon</b> [OPTION]
+
+# DESCRIPTION
+# <b>2fa-svc-mon</b> is called by the systemd 2fa-svc.service to update each
+# /etc/2fa/<service>-users file after a user has made a 2FA preference change
+# by running <b>2fa-svc-mng</b>.
+#
+# This script must be run as root, unless to execute the -h option.
+
+# OPTIONS
+# <b>-h, --help</b>
+#     Display this documentation header & exit.
+
+# CODE
+
+update () {
+    # read path of users ~/.2fa-services file that has changed
+    # (stdout from inotifywait)
+    while read -r filepath
+    do
+        #extract username
+        user="$(echo "$filepath" | cut  -d '/' -f 3)"
+
+        # update each /etc/2fa/<service>-users file as appropriate
+
+        # each service which is 2fa-enabled has an /etc/2fa/<service>-users
+        # file containing a list of usernames that are enabled for that service
+        # we can use this to create a list of 2fa services
+        while read -r service
+        do
+            # if service in user's ~/.2fa-services file then enable it
+            if grep -qw "$service" "$filepath"; then
+                # if username not in /etc/2fa/<service>-users
+                if ! grep -qw "$user" /etc/2fa/"${service}"-users; then
+                    # add it (i.e. enable 2fa for the service)
+                    echo "$user" >> /etc/2fa/"${service}"-users
+                fi
+            else
+            # service not in user's ~/.2fa-services file
+                # if user in /etc/2fa/<service>-users
+                if grep -qw "$user" /etc/2fa/"${service}"-users; then
+                    # remove it (i.e. disable 2fa for the service)
+                    sed -i "/$user/d" /etc/2fa/"${service}"-users
+                fi
+            fi
+        done < /etc/2fa/services
+    done
+}
+
+if [[ "$1" = "-h" || "$1" = "--help" ]]; then
+    display-help "$0"
+    exit 0
+fi
+
+if [ $EUID -ne 0 ]; then
+	echo "ABORT: This script must be run as root"
+	exit 1
+fi
+
+inotifywait -qm --event close_write --fromfile /etc/2fa/user-svc-files --format '%w' | update
+
+
+
+

@@ -1,0 +1,115 @@
+#!/bin/bash
+
+# NAME
+# 2fa-add-service - Adds support for a pam.d service within 2FA scripts
+
+# SYNOPSIS
+# <b>sudo 2fa-add-service</b> <u>service</u>
+# <b>2fa-add-service</b> [OPTION]
+
+# DESCRIPTION
+# This script, includes a <u>service</u> (defined by # a filename in /etc/pam.d)
+# into 2FA scripts.
+#
+# For a <u>service</u> to be included, the /etc/pam.d/service file must include
+# the line:
+#     @include common-auth
+# If no such line the script exits with a fail condition.
+#
+# The script must be run as root, unless to execute the <b>-h</b> option.
+
+# OPTIONS
+# <b>-h, --help</b>
+#     Display this documentation header & exit.
+
+# EXAMPLE
+#     sudo 2fa-add-service sshd
+#     sudo 2fa-add-service login
+
+# SEE ALSO
+# <b>2fa-del-service</b>
+
+# CODE
+
+if [[ "$1" = "-h" || "$1" = "--help" ]]; then
+    display-help "$0"
+    exit 0
+fi
+
+
+if [ $EUID -ne 0 ]; then
+	echo "ABORT: This script must be run as root"
+	exit 1
+fi
+
+service=$1
+if [ -z "$service" ]; then
+    echo "Abort: <service> argument not defined"
+    echo "Usage: 2fa-add-service <service>"
+    echo "Where: <service> is a service filename in /etc/pam.d"
+    echo "Example: 2fa-add-service login"
+fi
+
+# ensure the service is available in /etc/pam.d, if not exit with warning
+if [ ! -f "/etc/pam.d/$service" ]; then
+    echo "    ABORT: /etc/pam.d/$service does not exist"
+    exit 1
+fi
+
+# check that service uses @include common-auth, if not exit with warning
+if ! grep -q '@include common-auth' /etc/pam.d/"$service"; then
+    echo "    ABORT: /etc/pam.d/service does not include the directive '@include common-auth'"
+    exit 1
+fi
+
+# if this service not in /etc/2fa/services then add it.
+# Note this happens when adding a new service in an existing installation rather
+# than being called by 2fa-install where this script is called by content of
+# /etc/2fa/services
+
+if ! grep -qw "$service" /etc/2fa/services; then
+    echo "$service" >> /etc/2fa/services
+fi
+
+# create /etc/2fa/$service-users file
+touch "/etc/2fa/${service}-users"
+chmod 664 "/etc/2fa/${service}-users"
+
+
+
+# copy /etc/2fa/user-2fa.tmpl to /etc/2fa/auth-temp
+cp /etc/2fa/user-2fa.tmpl /etc/2fa/auth-temp
+
+# replace <service> with $service in /2fa/auth-temp
+sed -i "s/<service>/$service/g" /etc/2fa/auth-temp
+
+# if /etc/pam.d service file contains '# start 2fa'
+# then remove this line down to & including '# end 2fa'
+# this enables upgrade if user-2fa.tmpl is changed
+if grep -q '# start 2fa' /etc/pam.d/"$service"; then
+    sed -i '/# start 2fa/,/# end 2fa/d' /etc/pam.d/"$service"
+fi
+
+# in /etc/pam.d/$service, after '@include common-auth' add content of /etc/2fa/auth-temp
+sed -i "/@include common-auth/r /etc/2fa/auth-temp" "/etc/pam.d/$service"
+
+# remove /etc/2fa/auth-temp
+rm /etc/2fa/auth-temp
+
+# additional service specific code (ensure idempotent)
+case $service in
+    sshd)
+        echo "    Configuring 'ChallengeResponseAuthentication yes' in /etc/ssh/sshd_config"
+        sed -i \
+        's/ChallengeResponseAuthentication no/ChallengeResponseAuthentication yes/' \
+        /etc/ssh/sshd_config
+        echo "    Restaring ssh"
+        sudo systemctl restart ssh
+        ;;
+    lightdm)
+        echo "    Commenting line starting 'autologin-user=' in /etc/lightdm/lightdm.conf"
+        sed -i s/^autologin-user=/#autologin-user=/ /etc/lightdm/lightdm.conf
+        ;;
+esac
+sleep 2
+exit 0

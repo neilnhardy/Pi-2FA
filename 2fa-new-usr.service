@@ -1,0 +1,13 @@
+# 2fa-new-usr.service
+# systemd service that runs 2fa-new-user-mon
+# see header in 2fa-new-user-mon for more details 
+
+[Unit]
+Description=Pi-2FA new user creation monitor
+After=default.target
+
+[Service]
+ExecStart=/usr/local/bin/2fa-new-usr-mon
+
+[Install]
+WantedBy=default.target

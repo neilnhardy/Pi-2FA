@@ -1,0 +1,13 @@
+# 2fa-svc.service
+# systemd service that runs 2fa-svc-mon
+# see header in 2fa-svc-mon for more details 
+
+[Unit]
+Description=Pi-2FA user service update monitor
+After=default.target
+
+[Service]
+ExecStart=/usr/local/bin/2fa-svc-mon
+
+[Install]
+WantedBy=default.target

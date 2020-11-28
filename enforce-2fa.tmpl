@@ -1,0 +1,12 @@
+# start 2fa
+
+# note @include common-auth above is system password entry (first auth factor)
+
+# if user is in /etc/2fa/except_usrs, returns success to the application immediately
+# thus bypassing second factor.
+auth    sufficient    pam_listfile.so    item=user sense=allow file=/etc/2fa/except_usrs
+
+# second auth factor is TOTP using Google authenticator
+auth required pam_google_authenticator.so
+
+# end 2fa

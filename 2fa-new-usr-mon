@@ -1,0 +1,77 @@
+#!/bin/bash
+
+# NAME
+# 2fa-new-usr-mon - initialise 2fa for a new user
+
+# SYNOPSIS
+# <b>sudo 2fa-new-usr-mon</b> [OPTION]
+
+# DESCRIPTION
+# <b>2fa-new-usr-mon</b> is called by the systemd service <b>2fa-new-usr.service</b>.
+#
+# The new-user function is called each time a user directory is added to <b>/home</b>
+# (typically by 'adduser'). The new-user function creates a <b>.2fa-services</b> file
+# in the user's home directory. The full path of this file is also added to
+# <b>/etc/2fa/user-svc-files</b>, allowing the systemd 2fa-svc.service to process
+# changes made to the user's <b>~/.2fa-services</b> file.
+#
+# Each user's <b>~/.2fa-services</b> file contains a list of services for which 2FA
+# is enabled for that user. The user makes changes to this file by executing
+# <b>2fa-svc-mng</b>.
+#
+# The new-user function also creates an empty <b>~/.google_authenticator</b> file
+# enabling it to be watched by the <b>2fa-new-usr-reg.service</b> so that when changed
+# by <b>2fa-register</b> the user's exceptions for enforced services are removed.
+#
+# This script must be run as root, unless to execute the <b>-h</b> option.
+
+# OPTIONS
+# <b>-h, --help</b>
+#     Display this documentation header & exit.
+
+# CODE
+
+new-user () {
+    while true
+    do
+        # read directory (user) name that has been created in /home
+        # (stdout from 2nd inotifywait)
+        read -r user
+	    # create a ~/.2fa-services file for the new user
+        touch /home/"${user}"/.2fa-services
+        chown "$user":"$user" /home/"${user}"/.2fa-services
+        # add this filename to /etc/2fa/user-svc-files so that it triggers
+        # 1st inotifywait when changes made via '2fa-svc-mng'
+        echo "/home/${user}/.2fa-services" >> /etc/2fa/user-svc-files
+        # restart this systemd process so it uses updated /etc/2fa/user-svc-files
+        systemctl restart 2fa-svc.service
+
+        # Create an empty ~/.2fa-except file enabling it to be watched
+        # by the 2fa-new-usr-reg.service so that when changed by 2fa-register
+        # the user's exceptions for enforced serices are removed.
+        touch /home/"${user}"/.2fa-except
+        chown "$user":"$user" /home/"${user}"/.2fa-except
+        # add user's name to etc/2fa/except_usrs
+        echo "$user" >> /etc/2fa/except_usrs
+        # add '2fa-svc-mng' command to the new user's .bashrc so it will
+        # execute when they log in
+        echo "2fa-svc-mng" >> "/home/$user/.bashrc"
+        # add /home/<username>/.2fa-except to /etc/2fa/user-except-files
+        echo "/home/${user}/.2fa-except" >> /etc/2fa/user-except-files
+        # restart systemd process so it uses updated /etc/2fa/user-except-files
+        systemctl restart 2fa-new-usr-reg.service
+    done
+}
+
+if [[ "$1" = "-h" || "$1" = "--help" ]]; then
+    display-help "$0"
+    exit 0
+fi
+
+if [ $EUID -ne 0 ]; then
+    echo "ABORT: This script must be run as root"
+    exit 1
+fi
+
+# call the new-user function each time a file is created in the /home directory
+inotifywait -qm --event create /home --format '%f' | new-user

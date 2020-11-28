@@ -1,0 +1,64 @@
+#!/bin/bash
+
+# NAME
+# vpse - visudo password state editor
+
+# SYNOPSIS
+# <b>sudo vpse</b> <u>username</u> <b>enable</b>|<b>disable</b>
+# <b>vpse</b> [OPTION]
+
+# DESCRIPTION
+# When called by <b>spsc</b>, this script enables/disables the $USER's requirement
+# for a password to invoke the sudo command within PiOS. Note that enabling
+# the password is a prerequisite to implementing 2FA for sudo.
+
+# It functions as a custom editor called by visdo to edit
+# /etc/sudoers.d/010_pi-nopasswd, specifically adding (enable) or removing a 
+# comment '#' for the relevant user configuration, which takes the form
+# '<username> ALL=(ALL) NOPASSWD: ALL'
+# This approach avoids race conditions and adheres to file locking constraints.
+
+# OPTIONS
+# -h --help
+#     Displays this documentation header
+
+# CODE
+
+#fg_black="$(tput setaf 0)"
+fg_red="$(tput setaf 1)"
+#fg_green="$(tput setaf 2)"
+#fg_yellow="$(tput setaf 3)"
+#fg_blue="$(tput setaf 4)"
+#fg_magenta="$(tput setaf 5)"
+fg_cyan="$(tput setaf 6)"
+#fg_white="$(tput setaf 7)"
+fg_reset="$(tput sgr0)"
+bold="$(tput bold)"
+
+if [[ "$1" = "-h" || "$1" = "--help" ]]; then
+    display-help "$0"
+    exit 0
+fi
+
+if [ $EUID -ne 0 ]; then
+    echo "${bold}${fg_red}ABORT:${fg_cyan}This script must be run as root.${fg_reset}"
+    exit 1
+fi
+
+user=$1
+state=$2
+
+case $state in 
+    enable)
+        sudo sed -i "s/^$user /#$user /" /etc/sudoers.d/010_pi-nopasswd.tmp
+        ;;
+    disable)
+        sudo sed -i "s/^#$user /$user /" /etc/sudoers.d/010_pi-nopasswd.tmp
+        ;;
+    *)
+        echo "${bold}${fg_red}ABORT:${fg_cyan}Unexpected option.${fg_reset}"
+        exit 1
+        ;;
+esac
+
+exit 0

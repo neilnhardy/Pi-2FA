@@ -1,0 +1,75 @@
+#!/bin/bash
+
+# NAME
+# display-help - display documentation at start of bash script
+
+# SYNOPSIS
+# <b>display-help</b> <u>script</u>
+# <b>display-help</b> [OPTION]
+
+# DESCRIPTION
+# By installing the following code within a bash script:
+#
+#       if [[ "$1" = "-h" || "$1" = "--help" ]]; then
+#           display-help $0
+#           exit 0
+#       fi
+#
+# Executing the command:
+# $ <u>script</u> -h|--help
+#
+# Will generate a formatted display of the text between between the lines
+# '#!/bin/bash' & '# CODE'
+
+# Formatting:
+# Any lines with all uppercase letters only will be displayed in bold
+# text between <u>and</u> will be underlined
+# text between <b>and</b> will be displayed in bold
+
+# OPTIONS
+# <b>-h, --help</b>
+#     Display this documentation header & exit.
+
+# EXAMPLES
+# $ display-help -h
+# $ display-help --help
+
+# CODE
+
+
+
+if [[ "$1" = "-h" || "$1" = "--help" ]]; then
+    display-help "$0"
+    exit 0
+fi
+
+helpfile="$1"
+if [ -e "$helpfile" ]; then
+    b=$(tput bold)
+    normal=$(tput sgr0)
+    ul=$(tput smul)
+    nul=$(tput rmul)
+    while read -r line; do
+        if [ "$line" != "#!/bin/bash" ]; then
+            if [ "$line" = "# CODE" ]; then
+                exit 0
+            fi
+            # remove ^'# ', handle <u> <b> tags
+            line=$(echo "$line" | sed "s/^#\\s//" | sed "s/^#//" \
+            | sed "s/<u>/${ul}/g" | sed "s/<\\/u>/${nul}/g" \
+            | sed "s/<b>/${b}/g" | sed "s/<\\/b>/${normal}/g")
+
+            # embolden headers defined by only capital letters
+            if ! [[ $line =~ [a-z]+ ]]; then
+                line="${b}${line}${normal}"
+            fi
+
+            echo "$line"
+        fi
+    done < "$helpfile"
+    echo "display-help: # CODE Delimiter not found"
+    exit 1
+else
+    echo "display-help: filename $helpfile does not exist "
+    exit 1
+fi

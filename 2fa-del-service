@@ -1,0 +1,103 @@
+#!/bin/bash
+
+# NAME
+# 2fa-del-service - Deletes support for a pam.d service within 2FA scripts
+
+# SYNOPSIS
+# <b>sudo 2fa-del-service</b> <u>service</u>
+# <b>2fa-del-service</b> [OPTION]
+
+# DESCRIPTION
+# This script removes 2FA support for the <u>service</u>.
+#
+# This script must be run as root, unless to execute the <b>-h</b> option.
+
+# OPTIONS
+# <b>-h, --help</b>
+#     Display this documentation header & exit.
+
+# EXAMPLE
+# sudo 2fa-del-service sshd
+# sudo 2fa-del-service login
+
+# SEE ALSO
+# <b>2fa-add-service</b>
+
+# CODE
+
+#fg_black="$(tput setaf 0)"
+fg_red="$(tput setaf 1)"
+fg_green="$(tput setaf 2)"
+#fg_yellow="$(tput setaf 3)"
+#fg_blue="$(tput setaf 4)"
+#fg_magenta="$(tput setaf 5)"
+fg_cyan="$(tput setaf 6)"
+#fg_white="$(tput setaf 7)"
+fg_reset="$(tput sgr0)"
+bold="$(tput bold)"
+
+if [[ "$1" = "-h" || "$1" = "--help" ]]; then
+    display-help "$0"
+    exit 0
+fi
+
+if [ $EUID -ne 0 ]; then
+	echo "${bold}${fg_red}ABORT:${fg_cyan} This script must be run as root.${fg_reset}"
+	exit 1
+fi
+
+service=$1
+if [ -z "$service" ]; then
+    echo "${bold}${fg_red}ABORT:${fg_cyan} <service> argument not defined.${fg_reset}"
+    read -r -p "${bold}${fg_green}Display help? [Y/n] ${fg_reset}" response
+            if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
+            sudo 2fa-del-service -h
+            fi
+            exit 1
+fi
+
+# ensure the service is enabled
+if  ! grep -qw "$service" /etc/2fa/services; then
+    echo "    ABORT: $service not enabled"
+    exit 1
+fi
+
+# if /etc/pam.d service file contains '# start 2fa'
+# then remove this line down to & including '# end 2fa'
+if grep -q '# start 2fa' /etc/pam.d/"$service"; then
+    sed -i '/# start 2fa/,/# end 2fa/d' /etc/pam.d/"$service"
+fi
+
+# remove the service from each users ~/.2fa-services file
+for user in $(find /home/ -maxdepth 1 -mindepth 1|sed  "s/\\/home\\///")
+do
+    if grep -qw "$service" /home/"$user"/.2fa-services; then
+        sed -i "/$service/d" "/home/$user/.2fa-services"
+    fi
+done
+
+# remove /etc/2fa/$service-users file
+if [ -f "/etc/2fa/${service}-users" ]; then
+    rm -f "/etc/2fa/${service}-users"
+fi
+
+# remove from /etc/2fa/services & enforced
+sed -i "/^${service}\$/d" /etc/2fa/services
+sed -i "/^${service}\$/d" /etc/2fa/enforced
+
+# additional service specific code (ensure idempotent)
+case $service in
+    sshd)
+        sed -i \
+        's/ChallengeResponseAuthentication yes/ChallengeResponseAuthentication no/' \
+        /etc/ssh/sshd_config
+        echo "    Restaring ssh"
+        sudo systemctl restart ssh
+        ;;
+    lightdm)
+        echo "    Commenting line starting 'autologin-user=' in /etc/lightdm/lightdm.conf"
+        sed -i s/^autologin-user=/#autologin-user=/ /etc/lightdm/lightdm.conf
+        ;;
+esac
+sleep 2
+exit 0

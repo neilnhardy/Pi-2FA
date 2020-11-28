@@ -1,0 +1,47 @@
+#!/bin/bash
+
+# NAME
+# spsc - sudo password state change
+
+# SYNOPSIS
+# <b>sudo spsc</b> <u>username</u> <b>enable</b>|<b>disable</b>
+# <b>spsc</b> [OPTION]
+
+# DESCRIPTION
+# In conjunction with vpse this script enables/disables the $USER's requirement
+# for a password to invoke the sudo command within PiOS. Note that enabling
+# the password is a prerequisite to implementing 2FA
+#
+# This command calls the vpse script to function as a custom editor called by
+# the visdo command to edit /etc/sudoers.d/010_pi-nopasswd.
+#
+# This approach avoids race conditions and adheres to file locking constraints
+# when editing /etc/sudoers.d/010_pi-nopasswd
+#
+# for more details including operating constraints read the vpse code header
+#
+# The script must be run as root, unless to execute the -h option.
+
+# OPTIONS
+# -h --help
+#     Displays this documentation header
+
+# CODE
+
+if [[ "$1" = "-h" || "$1" = "--help" ]]; then
+    display-help "$0"
+    exit 0
+fi
+
+if [ $EUID -ne 0 ]; then
+    echo "ABORT: This script must be run as root"
+    exit 1
+fi
+
+if export EDITOR="vpse $1 $2" && sudo -E visudo -f /etc/sudoers.d/010_pi-nopasswd; then
+    exit 0
+else
+    echo "fail"
+    exit 1
+fi
+

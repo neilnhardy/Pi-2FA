@@ -1,0 +1,359 @@
+#!/bin/bash
+
+# NAME
+# 2fa-install - Installs/rebuilds the 2FA environment
+
+# SYNOPSIS
+# [<b>sudo</b>] <b>2fa-install</b> [OPTION]
+
+# DESCRIPTION
+# This interactive script installs the 2-factor authenticatiion (2FA) environment.
+#
+# The script must be run as root from the repository directory, unless to execute
+# the -h option.
+#
+# Note the script can be run on an exiting installation, upon which it removes
+# and rebuilds the configuration state files as far as possible, allowing
+# re-synchronisation in the event of a file corruption.
+
+# OPTIONS
+# <b>-h, --help</b>
+#     Display this documentation header & exit.
+# <b>-n, --no-update</b>
+#     Skip apt update
+
+# CODE
+
+#fg_black="$(tput setaf 0)"
+fg_red="$(tput setaf 1)"
+fg_green="$(tput setaf 2)"
+#fg_yellow="$(tput setaf 3)"
+#fg_blue="$(tput setaf 4)"
+#fg_magenta="$(tput setaf 5)"
+fg_cyan="$(tput setaf 6)"
+fg_white="$(tput setaf 7)"
+fg_reset="$(tput sgr0)"
+bold="$(tput bold)"
+
+
+if [[ "$1" = "-h" || "$1" = "--help" ]]; then
+    display-help "$0"
+    exit 0
+fi
+
+if [[ "$1" = "-n" || "$1" = "--no-update" ]]; then
+    update="False"
+else
+    update="True"
+fi
+
+if [ $EUID -ne 0 ]; then
+    echo "${bold}${fg_red}ABORT:${fg_cyan}This script must be run as root.${fg-reset}"
+    exit 1
+fi
+
+
+
+echo "${bold}${fg_cyan}
+Pi-2FA Installation
+-------------------
+"
+
+# if runnning a Desktop version really need to change options to include
+# entering a password on booting the system. Note the minimal (Lite) boots
+# using option 1
+if [ -e /etc/init.d/lightdm ]; then
+echo "By default 'desktop' versions of PiOS implement autologin (0FA) on booting
+which is inconsistent with implementing 2FA.
+
+To enable enhanced security the following options are available:
+
+1. boot-console-login (1FA)
+   Boots to a tty interface interface requiring the entry of a username and
+   password.
+
+2. boot-desktop-login (1FA)
+   Boots to the graphical desktop interface requiring the entry of a
+   username and password.
+
+3. Retain existing boot option.
+
+4. Cancel installation.
+
+
+Notes:
+
+*  Once 1FA has been implemented (by selecting either options 1 or 2) 2FA can
+   be subsequently implemented by user preference or enforcement.
+
+*  The above boot options persist through shutdown/restart but can be changed by
+   executing this script again.
+
+"
+read -r -p "${fg_green}${bold}Select 1,2,3 or 4 :  ${fg_reset}" response
+
+# note no 3 as this requires no action
+case $response in
+    "1")
+        sudo raspi-config nonint do_boot_behaviour B1 2>/dev/null
+        ;;
+    "2")
+        sudo raspi-config nonint do_boot_behaviour B3 2>/dev/null
+        ;;
+    "4")
+        echo "Try again later"
+        exit 0
+        ;;
+    *)
+esac
+echo "Done"
+echo
+fi
+
+# Loading Apps
+if [ "$update" = "True" ]; then
+    echo "${bold}${fg_white}Updating apt${fg_reset}"
+    apt update
+    echo
+fi
+
+if ! command -v inotifywait 1>/dev/null; then
+    echo "${bold}${fg_white}Installing  inotify-tools${fg_reset}"
+    apt install inotify-tools -y
+    echo "Done"
+    echo
+fi
+
+if ! command -v google-authenticator 1>/dev/null; then
+    echo "${bold}${fg_white}Installing  Google Authenticator on RPI${fg_reset}"
+    apt install libpam-google-authenticator -y
+    echo "Done"
+    echo
+fi
+
+# copying executables to a directory in $PATH
+
+echo "${bold}${fg_white}Copying executables to /usr/local/bin${fg_reset}"
+cp ./spsc /usr/local/bin
+chmod 755 /usr/local/bin/spsc
+cp ./vpse /usr/local/bin
+chmod 755 /usr/local/bin/vpse
+cp ./2fa-add-service /usr/local/bin
+chmod 755 /usr/local/bin/2fa-add-service
+cp ./2fa-del-service /usr/local/bin
+chmod 755 /usr/local/bin/2fa-del-service
+cp ./2fa-svc-mon /usr/local/bin
+chmod 755 /usr/local/bin/2fa-svc-mon
+cp ./2fa-new-usr-reg-mon /usr/local/bin
+chmod 755 /usr/local/bin/2fa-new-usr-reg-mon
+cp ./2fa-new-usr-mon /usr/local/bin
+chmod 755 /usr/local/bin/2fa-new-usr-mon
+cp ./2fa-svc-enf /usr/local/bin
+chmod 755 /usr/local/bin/2fa-svc-enf
+cp ./2fa-register /usr/local/bin
+chmod 755 /usr/local/bin/2fa-register
+cp ./2fa-svc-mng /usr/local/bin
+chmod 755 /usr/local/bin/2fa-svc-mng
+cp ./display-help /usr/local/bin
+chmod 755 /usr/local/bin/display-help
+echo "Done"
+echo
+
+# create /etc/2fa, deleting old one if it exists 
+echo "${bold}${fg_white}Setting up /etc/2fa directory${fg_reset}"
+if [ -d /etc/2fa ]; then
+    # copy /etc/2fa/services & /etc/2fa/enforced to /tmp to restore them after
+    # deleting /etc/2fa
+    cp /etc/2fa/services /tmp/2fa-services
+    cp /etc/2fa/enforced /tmp/2fa-enforced
+    rm -rf /etc/2fa/
+fi
+mkdir /etc/2fa
+#chmod ug=rwx,o=rx /etc/2fa
+echo "Done"
+echo
+
+# restore files preservced in /tmp
+if [ -f /tmp/2fa-services ]; then
+    # restore 2fa-services if /tmp file exists
+    mv /tmp/2fa-services /etc/2fa/services
+else
+    # otherwise use repo file
+    cp ./services /etc/2fa/services
+    # if this is a non-desktop build remove 'lightdm' service option
+    if [ ! -e /etc/init.d/lightdm ]; then
+        sed -i "/lightdm/d" /etc/2fa/services
+    fi
+fi
+if [ -f /tmp/2fa-enforced ]; then
+    # restore 2fa-enforced if /tmp file exists
+    mv /tmp/2fa-enforced /etc/2fa/enforced
+else
+    # otherwise use repo file
+    cp ./enforced /etc/2fa/enforced
+fi
+
+# create /etc/2fa/user-svc-files used by systemd 2fa-svc.service to track
+# changes in user's /home/<user>/.2fa-services file
+touch /etc/2fa/user-svc-files
+chmod 664 /etc/2fa/user-svc-files
+
+# create /etc/2fa/except_usrs file which allows non registered users to
+# bypass enforce services
+touch /etc/2fa/except_usrs
+chmod 664 /etc/2fa/except_usrs
+
+# create /etc/2fa/new-ggl-auth-files used by systemd 2fa-new-user-reg.service
+# to track changes in user's /home/<user>/.google_authenticator file
+touch /etc/2fa/new-ggl-auth-files
+chmod 664 /etc/2fa/new-ggl-auth-files
+
+cp ./user-2fa.tmpl /etc/2fa/user-2fa.tmpl
+cp ./enforce-2fa.tmpl /etc/2fa/enforce-2fa.tmpl
+
+echo "${bold}${fg_white}Enabling 2fa for /etc/pam.d services in /etc/2fa/2fa-services${fg_reset}"
+
+# Enable services
+while read -r service
+do
+    echo "Enabling $service"
+    2fa-add-service "$service"
+done < /etc/2fa/services
+
+# for each /home/user
+#for user in $(echo $(ls -l /home | grep -v total |tr -s " "|cut -d " " -f 4))
+for user in $(find /home/ -maxdepth 1 -mindepth 1|sed  "s/\\/home\\///")
+do
+    # if user does not have a ~/.2fa-service file create one
+    if [ ! -f /home/"$user"/.2fa-services ]; then
+        touch /home/"$user"/.2fa-services
+        chown "$user":"$user" /home/"$user"/.2fa-services
+    fi
+    # add path of new/existing ~/.2fa-service file to /etc/2fa/user-svc-files
+    # so changes can be tracked by systemd 2fa-svc.service
+    echo "/home/$user/.2fa-services" >> /etc/2fa/user-svc-files
+
+    # update each /etc/2fa/<service>-users file as appropriate
+    while read -r service
+    do
+        # if service in user's ~/.2fa-services file then enable it
+        if grep -qw "$service" /home/"$user"/.2fa-services; then
+            # if username not in /etc/2fa/<service>-users
+            if ! grep -qw "$user" /etc/2fa/"${service}"-users; then
+                # add it (i.e. enable 2fa for the service)
+                echo "$user" >> /etc/2fa/"${service}"-users
+            fi
+        else
+        # service not in user's ~/.2fa-services file
+            # if user in /etc/2fa/<service>-users
+            if grep -qw "$user" /etc/2fa/"${service}"-users; then
+                # remove it (i.e. disable 2fa for the service)
+                sed -i "/$user/d" "/etc/2fa/${service}-users"
+            fi
+        fi
+    done < /etc/2fa/services
+
+    # if user does not have a populated~/google_authenticator file create an
+    # a 2fa-except file which will allow them to bypass enforced services 
+    if [ ! -s "/home/$user/.google_authenticator" ]; then
+        touch "/home/$user/.2fa-except"
+        chown "$user":"$user" /home/"$user"/.2fa-except
+        # add user to /etc/2fa/except_usrs so they can access a service even if
+        # 2fa is enforced.
+        echo "$user" >> /etc/2fa/except_usrs
+        # If not already done, add '2fa-svc-mng' command to the new user's
+        # /home/<username>/.bashrc to encourage them to register
+        if ! grep -q 2fa-svc-mng /home/"$user"/.bashrc; then
+            echo "2fa-svc-mng" >> "/home/$user/.bashrc"
+        fi
+        # add /home/<username>/.2fa-except to /etc/2fa/user-except-files
+        # so they are watched by 2fa-new_usr-reg.service
+        echo "/home/$user/.2fa-except" >> /etc/2fa/user-except-files
+     fi
+done
+echo "Done"
+echo
+
+# Enforce enforced services
+echo "${bold}${fg_white}Enabling 2FA enforcement ${fg_reset}"
+while read -r enforced
+do
+    echo "$enforced"
+    # copy /etc/2fa/enforce-2fa.tmpl to /etc/2fa/auth-temp
+    cp /etc/2fa/enforce-2fa.tmpl /etc/2fa/auth-temp
+    # replace <service> with $enforced in /2fa/auth-temp
+    sed -i "s/<service>/$enforced/g" /etc/2fa/auth-temp
+    # remove existing 2fa template in /etc/pam.d/service
+    sed -i '/# start 2fa/,/# end 2fa/d' /etc/pam.d/"$enforced"
+    # in /etc/pam.d/$enforced, after '@include common-auth' add content of /etc/2fa/auth-temp 
+    sed -i "/@include common-auth/r /etc/2fa/auth-temp" "/etc/pam.d/$enforced"
+    # remove /etc/2fa/auth-temp
+    rm /etc/2fa/auth-temp
+done < /etc/2fa/enforced
+echo "Done"
+echo
+
+# Initialise systemd 2fa-svc.service (2fa-svc-mon)
+echo "${bold}${fg_white}Initiating systemd 2fa-svc.service (2fa-svc-mon)${fg_reset}"
+if [ -f /etc/systemd/system/2fa-svc.service ]; then
+    rm -rf /etc/systemd/system/2fa-svc.service 
+fi
+cp 2fa-svc.service /etc/systemd/system
+systemctl daemon-reload
+systemctl enable 2fa-svc.service
+systemctl stop 2fa-svc.service
+systemctl start 2fa-svc.service
+echo
+echo "${bold}${fg_green}Displaying 2fa-svc.service status - enter 'q' continue${fg_reset}"
+echo
+systemctl --full status 2fa-svc.service
+echo
+
+# Initialise systemd 2fa-new-usr.service (2fa-new-usr-mon)
+echo "${bold}${fg_white}Initiating systemd 2fa-new-usr.service (2fa-new-usr-mon)${fg_reset}"
+if [ -f /etc/systemd/system/2fa-new-usr.service ]; then
+    rm -rf /etc/systemd/system/2fa-new-usr.service 
+fi
+cp 2fa-new-usr.service /etc/systemd/system
+systemctl daemon-reload
+systemctl enable 2fa-new-usr.service
+systemctl stop 2fa-new-usr.service
+systemctl start 2fa-new-usr.service
+echo
+echo "${bold}${fg_green}Displaying 2fa-new-usr.service status - enter 'q' continue${fg_reset}"
+echo
+systemctl --full status 2fa-new-usr.service
+echo
+
+# Initialise systemd 2fa-new-usr-reg.service (2fa-new-usr-reg-mon)
+echo "${bold}${fg_white}Initiating systemd 2fa-new-usr-reg.service (2fa-new-usr-reg-mon)${fg_reset}"
+if [ -f /etc/systemd/system/2fa-new-usr-reg.service ]; then
+    rm -rf /etc/systemd/system/2fa-new-usr-reg.service 
+fi
+cp 2fa-new-usr-reg.service /etc/systemd/system
+systemctl daemon-reload
+systemctl enable 2fa-new-usr-reg.service
+systemctl stop 2fa-new-usr-reg.service
+systemctl start 2fa-new-usr-reg.service
+echo
+
+# do not display status as it may show active (dead) due to empty /etc/2fa/new-ggl-auth-files
+# this is not a problem as 2fa-new-usr.service will populate /etc/2fa/new-ggl-auth-files then
+# re-start the service when a new user is created. Uncomment the lines below if you want to 
+# see the status regardless.
+
+#echo "${bold}${fg_green}Displaying 2fa-new-usr-reg.service status - enter 'q' continue${fg_reset}"
+#echo
+#systemctl --full status 2fa-new-usr-reg.service
+#echo
+
+if [[ $response -eq 1 || $response -eq 2 ]]; then
+    echo "${bold}${fg_cyan}As you have selected a boot option it is recommended that you reboot now.${fg_reset}" 
+    read -r -p "${bold}${fg_green}Reboot now? [Y/n] ${fg_reset}" response
+    if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
+        shutdown -r now
+    fi
+fi 
+echo "${bold}${fg_cyan}Installation/Rebuild Complete. ${fg_reset}"
+echo
+exit 0

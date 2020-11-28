@@ -1,0 +1,156 @@
+#!/bin/bash
+
+# NAME
+# 2fa-register - Initialise google-authenticator for $USER
+
+# SYNOPSIS
+# <b>2fa-register</b> [OPTION]
+
+# DESCRIPTION
+# 1. Guides the user through initating Google Authenticator on their
+#    RPi account, creating a ~/.google-authenticator file.
+# 2. Guides user through syncing their mobile TOTP application with
+#    their RPi account by scanning a barcode created in (1) above.
+
+# OPTIONS
+# -h --help
+#     Display this documentation header & exit.
+
+# NOTES
+# When run for the first time <b>2fa-svc-mng</b> executes <b>2fa-register</b>.
+# If <b>2fa-register</b> does not complete successfully <b>2fa-svc-mng</b> will fail
+# If <b>2fa-register</b> completes successfully it will not be no longer be called by
+# <b>2fa-svc-mng</b>
+
+# 2fa-register can be run alone to create a new secret key. (e.g after loss of the
+# TOTP generating device.
+
+
+# SEE ALSO
+# <b>2fa-svc-mng</b>
+
+# CODE
+
+#fg_black="$(tput setaf 0)"
+fg_red="$(tput setaf 1)"
+fg_green="$(tput setaf 2)"
+fg_yellow="$(tput setaf 3)"
+#fg_blue="$(tput setaf 4)"
+#fg_magenta="$(tput setaf 5)"
+fg_cyan="$(tput setaf 6)"
+#fg_white="$(tput setaf 7)"
+fg_reset="$(tput sgr0)"
+bold="$(tput bold)"
+
+if [[ "$1" = "-h" || "$1" = "--help" ]]; then
+    display-help "$0"
+    exit 0
+fi
+
+if [ $EUID -eq 0 ]; then
+	echo "${fg_red}${bold}ABORT:${fg_cyan} This script must not be run as root.${fg_reset}"
+	exit 1
+fi
+
+# make sure this script is not running elsewhere
+procs="$(ps -u)"
+ps_cnt="$(echo "$procs"| grep '/bin/bash /usr/local/bin/2fa-register' |grep -c -v grep)"
+if [ "$ps_cnt" -gt 1 ]; then
+    echo "${bold}${fg_red}ABORT: ${fg_cyan}You are already executing this script.${fg_reset}"
+    exit 1
+fi
+echo
+echo "${fg_cyan}${bold}2-Factor Authentication Registration"
+echo "${fg_cyan}${bold}------------------------------------"
+echo
+# if user has a non-empty ./google authenticator file then give a warning
+if [ -s "$HOME/.google_authenticator" ]; then
+    echo "${fg_yellow}${bold}WARNING:${fg_cyan} You already have a ~/.google_authenticator file."
+    echo "Continuing will create a new secret key, requiring you to re-register"
+    echo "this account on your TOTP token generating application(s)."
+    echo
+    read -r -p "${fg_green}Do you want to continue? [Y/n] ${fg_reset}" response
+    if ! [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
+        exit 1
+    fi
+    echo
+fi
+echo "${fg_cyan}${bold}If you don't already have it, install a suitable TOTP token generator
+on your smartphone/tablet. 'Authy' & 'Google Authenticator' have been
+tested, however many others are available. You should do this before continuing
+"
+
+read -r -p "${fg_green}Do you want to continue? [Y/n] ${fg_reset}" response
+if ! [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
+    echo "${fg_cyan}${bold}Re-run '2fa-svc-mng' when you are ready.${fg_reset}"
+    exit 1
+fi
+
+echo "
+
+${fg_yellow}${bold}IMPORTANT
+================================================================================
+${fg_cyan}You will now be asked a number of questions.
+It is recommended that you answer 'y' to all of them.
+"
+read -n 1 -s -r -p "${fg_green}Press any key to continue.${fg_reset}"
+echo
+echo
+
+google-authenticator
+
+# if ~/.google_authenticator file does not exist or is empty something has gone
+# wrong so exit
+if [ ! -s "$HOME"/.google_authenticator ]; then
+    echo "${bold}${fg_red}ABORT: ${fg_cyan}failed to create .google_authenticator file"
+    echo "Execute '2fa-svc-mng' to try again or wait until you next log in.${fg_reset}"
+    exit 1
+fi
+echo "
+${fg_cyan}${bold}Make a note of the emergency scratch codes and keep them safe.
+Re-size this terminal window to beyond the width of the barcode.
+"
+read -n 1 -s -r -p "${fg_green}Press any key to continue."
+echo
+echo
+
+echo "${fg_cyan}
+Open your smartphone TOTP app and add a new account. This should involve
+scanning the barcode above, resulting in a 6-digit verification code being
+displayed, renewing every 30s.
+
+Guidance for Google Authenticator Registration
+-----------------------------------------------
+If this is the first time you have used Google Authenticator on your smartphone
+Tap 'BEGIN SETUP', otherwise tap '+ at the top of the screen.
+Tap 'Scan barcode' on the menu at the bottom of the screen.
+Allow Authenticator access to camera if asked.
+Scan the barcode with the smartphone camera.
+A 6 digit passcode should then be dispayed on the smartphone.
+"
+read -r -p "${fg_green}Was your registration successful? [Y/n] ${fg_reset}" response
+if [[ "$response" =~ ^([nN][oO]|[nN])$ ]]; then
+    echo
+    echo -n "${fg_cyan}${bold}"
+    echo "You could try manually loading the private key on the first line of"
+    echo "/home/$USER/.google_authenticator into your mobile TOTP app."
+    read -r -p "${fg_green}Did this work? [Y/n] ${fg_reset}" response
+    if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
+        echo  "${fg_cyan}${bold}Good!${fg_reset}"
+        rm -f "$HOME"/.2fa-except
+        exit 0
+    fi
+    echo 
+    echo "${fg_cyan}${bold}Try running 2fa-svc-mng again, perhaps with a different TOTP app."
+    read -n 1 -s -r -p "${fg_green}Press any key to continue.${fg_reset}"
+    echo
+    if [ -e "$HOME"/.google_authenticator ]; then
+        rm -f "$HOME"/.google_authenticator
+    fi
+    exit 1
+fi
+rm -f "$HOME"/.2fa-except
+echo
+echo
+echo "Complete. ${fg_reset}"
+exit 0

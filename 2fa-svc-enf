@@ -1,0 +1,125 @@
+#!/bin/bash
+
+# NAME
+# 2fa-svc-enf - interactively view/change which services have 2FA enforced
+
+# SYNOPSIS
+# <b>sudo 2fa-svc-enf</b>
+# <b>2fa-svc-enf</b> [OPTION]
+
+# DESCRIPTION
+# For each supported service the administrator is:
+#    1. Informed of the current state of enforcement (ENABLED/DISABLED)
+#    2. Given a Y/N option to change to the alternate state.
+#
+
+# When 2FA is enforced each user's preference set by <b>2fa-svc-mng</b> is overriden
+# by replacing the 2FA configuration within the <b>/etc/pam.d/<service></b> file with
+# one that does not refer to the <b>/etc/2fa/<service>-users</b> file to see if a 2FA
+# challenge is issued, instead the challenge is always issued. This change is
+# reverted when enforcement is disabled and each user's previous preference
+# are restored.
+#
+# When a user account is created it bypasses enforcement until the user
+# completes <b>2fa-register</b>. This bypass can be removed by removing the
+# username from <b>/etc/2fa/except_usrs</b>
+#
+# Enforced services are identified when the user runs <b>2fa-svc-mng</b>
+#
+# This script must be run as root, unless to execute the -h option.
+
+# OPTIONS
+# <b>-h, --help</b>
+#     Display this documentation header & exit.
+
+# CODE
+
+#fg_black="$(tput setaf 0)"
+fg_red="$(tput setaf 1)"
+fg_green="$(tput setaf 2)"
+fg_yellow="$(tput setaf 3)"
+#fg_blue="$(tput setaf 4)"
+#fg_magenta="$(tput setaf 5)"
+fg_cyan="$(tput setaf 6)"
+fg_white="$(tput setaf 7)"
+fg_reset="$(tput sgr0)"
+bold="$(tput bold)"
+
+if [[ "$1" = "-h" || "$1" = "--help" ]]; then
+    display-help "$0"
+    exit 0
+fi
+
+if [ $EUID -ne 0 ]; then
+    echo "${bold}${fg_red}ABORT:${fg_cyan} This script must be run as root${fg_reset}"
+    exit 1
+fi
+
+if [ -s /etc/2fa/except_usrs ]; then
+      echo "${bold}${fg_yellow}WARNING:${fg_cyan} The following user(s) have yet to complete 2FA registration and by "
+      echo "default will bypass policy enforcement. To remove their bypass delete their "
+      echo "username(s) from /etc/2fa/except_usrs. Note this will result in denial of"
+      echo "enforced service(s).${fg_reset}${bold}${fg_white}"
+      echo
+      cat /etc/2fa/except_usrs
+      echo "${fg_reset}"
+fi
+while read -r service 
+do
+    if ! grep -qw "$service" /etc/2fa/enforced; then
+        echo "${fg_reset}2fa is USER-CONTROLLED for $service"
+        read -r -p "${bold}${fg_green}Do you want 2fa ENFORCED for $service ? [Y/n] ${fg_reset}" response </dev/tty
+        if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
+            # replace user-2fa.tmpl with enforce-2fa.tmpl in /etc/pam.d/$service
+
+            # copy /etc/2fa/enforce-2fa.tmpl to /etc/2fa/auth-temp
+            cp /etc/2fa/enforce-2fa.tmpl /etc/2fa/auth-temp
+            # replace <service> with $service in /2fa/auth-temp
+            sed -i "s/<service>/$service/g" /etc/2fa/auth-temp
+            # remove existing 2fa template in /etc/pam.d/service
+            sed -i '/# start 2fa/,/# end 2fa/d' /etc/pam.d/"$service"
+            # in /etc/pam.d/$service, after '@include common-auth' add content of /etc/2fa/auth-temp
+            sed -i "/@include common-auth/r /etc/2fa/auth-temp" "/etc/pam.d/$service"
+            # remove /etc/2fa/auth-temp
+            rm /etc/2fa/auth-temp
+            # add service to /etc/2fa/enforced
+            echo "$service" >> /etc/2fa/enforced
+
+            # if enforcing sudo, need to hide 010-pi-nopasswd
+            if [ $"service" = "sudo" ]; then
+                if [ -e /etc/sudoers.d/010_pi-nopasswd ]; then
+                    mv /etc/sudoers.d/010_pi-nopasswd /etc/2fa/
+                fi
+            fi
+            echo "Done"
+        fi
+    else
+        echo "${fg_reset}2fa is ENFORCED for $service"
+        read -r -p "${bold}${fg_green}Do you want 2fa USER-CONTROLLED for $service ? [Y/n] ${fg_reset}" response < /dev/tty
+        if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
+            # replace enforce-2fa.tmpl with user-2fa.tmpl in /etc/pam.d/$service
+
+            # copy /etc/2fa/user-2fa.tmpl to /etc/2fa/auth-temp
+            cp /etc/2fa/user-2fa.tmpl /etc/2fa/auth-temp
+            # replace <service> with $service in /2fa/auth-temp
+            sed -i "s/<service>/$service/g" /etc/2fa/auth-temp
+            # remove existing 2fa template in /etc/pam.d/service
+            sed -i '/# start 2fa/,/# end 2fa/d' /etc/pam.d/"$service"
+            # in /etc/pam.d/$service, after '@include common-auth' add content of /etc/2fa/auth-temp
+            sed -i "/@include common-auth/r /etc/2fa/auth-temp" "/etc/pam.d/$service"
+            # remove /etc/2fa/auth-temp
+            rm /etc/2fa/auth-temp
+            # remove service from/etc/2fa/enforced
+            sed -i "/$service/d" /etc/2fa/enforced
+
+            # restore 010-pi-nopasswd
+            if [ "$service" = "sudo" ]; then
+                if [ -e /etc/2fa/010_pi-nopasswd ]; then
+                    mv /etc/2fa/010_pi-nopasswd /etc/sudoers.d/
+                fi
+            fi
+            echo "Done"
+        fi
+    fi
+    echo
+done < /etc/2fa/services

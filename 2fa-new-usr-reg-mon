@@ -1,0 +1,71 @@
+#!/bin/bash
+
+# NAME
+# 2fa-new-usr-reg-mon - take actions after user has run 2fa-register
+
+# SYNOPSIS
+# <b>sudo 2fa-new-usr-reg-mon</b> [OPTION]
+
+# DESCRIPTION
+# <b>2fa-new-usr-reg-mon</b> is called by the systemd service <b>2fa-new-usr-reg.service</b>.
+# The newUserReg function is called when a user executes <b>2fa-register</b>
+# which results in a DELETE_SELF of the user's <b>~/.2fa-except</b> file
+
+# The newUserReg function:
+# *   Removes the user's name from <b>/etc/2fa/except_usrs</b> removing their
+#     ability to bypass 2fa enforcement
+# *   Removes the <b>2fa-register</b> command from the new user's <b>~/.bashrc</b> so they
+#     will no longer be asked to register when they logon.
+# *   Removes <b>/home/$USER/.2fa-except</b> from <b>/etc/2fa/user-except-files</b>
+#     so it no longer triggers  this event.
+# This script must be run as root, unless to execute the -h option.
+
+# OPTIONS
+# <b>-h, --help</b>
+#     Display this documentation header & exit.
+#
+# CODE
+
+newUserReg () {
+
+    # get path of file from stdout that has triggered this event
+    while read -r filepath
+    
+    do
+        # Extract user's name
+        user="$(echo "$filepath" | cut  -d '/' -f 3)"
+
+	# Remove user's name from `/etc/2fa/except_usrs`
+	# (i.e. disable 2fa enforcement override for this user)
+	if grep -qw "$user" /etc/2fa/except_usrs; then
+	    sed -i "/^${user}\$/d" /etc/2fa/except_usrs
+	fi
+
+	# Remove `2fa-svc-mng` command from the new user's .bashrc
+	if grep -q 2fa-svc-mng /home/"$user"/.bashrc; then
+	    sed -i /2fa-svc-mng/d /home/"$user"/.bashrc
+	fi
+
+	# Remove  '/home/<username>/.2fa-except` from `/etc/2fa/user-except-files` file
+	sed -i "/\\/home\\/$user\\/.2fa-except/d"  /etc/2fa/user-except-files
+
+	# Restart  `2fa-new-usr-reg.service` to reflect changes made to  /etc/2fa/user-except-files
+	systemctl restart 2fa-new-usr-reg.service
+    done
+}
+
+if [[ "$1" = "-h" || "$1" = "--help" ]]; then
+    display-help "$0"
+    exit 0
+fi
+
+if [ $EUID -ne 0 ]; then
+    echo "ABORT: This script must be run as root"
+    exit 1
+fi
+
+# set up watcher which, when the attributes of a file listed in
+# /etc/2fa/user-except-files have been changed, sends full path of affected
+# file to stdout .This is then passed as input to the newUserReg function
+
+inotifywait -qm --event delete_self --fromfile /etc/2fa/user-except-files --format '%w' | newUserReg

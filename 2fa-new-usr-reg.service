@@ -1,0 +1,14 @@
+# 2fa-new-usr-reg.service
+# systemd service that runs 2fa-new-usr-reg-mon
+# see header in 2fa-new-user-reg-mon for more details 
+
+[Unit]
+Description=Pi-2FA new user registration monitor
+After=default.target
+
+[Service]
+ExecStart=/usr/local/bin/2fa-new-usr-reg-mon
+
+[Install]
+WantedBy=default.target
+

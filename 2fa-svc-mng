@@ -1,0 +1,173 @@
+#!/bin/bash
+
+# NAME
+# 2fa-svc-mng - Interactively view/change which services require 2FA.
+
+# SYNOPSIS
+# <b>2fa-svc-mng</b> [OPTIONS]
+
+# DESCRIPTION
+# For each supported, non 2FA enforced service the user is:
+#    1. Informed of the curerent state of 2FA (ENABLED/DISABLED)
+#    2. Given a Y/N option to change to the alternate state.
+# 2FA enforced services are also identified.
+#
+# Enabling a service results in the service name being added to
+# the user's $HOME/.2fa-services file
+#
+# Disabling a service results in the service name being removed from
+# the user's $HOME/.2fa-services file.
+#
+# When a user's $HOME/.2fa-services file is changed, the systemd 2fa-svc.serivce
+# running <b>2fa-svc-mon</b> as root, will update the /etc/2fa/<service>-users files,
+# including the user's username where the user has enabled 2FA, removing their
+# username where 2FA is disabled.
+#
+# Unless 2FA is enforced for the service (see <b>2fa-svc-enf -h </b>), it is the
+# /etc/2fa/<service>-users file that is referenced by /etc/pam.d/<service>
+# to determine if a challenge is made to enter a TOTP verification code for
+# the user being authenticated.
+
+# OPTIONS
+# <b>-h, --help</b>
+#     Display this documentation header & exit.
+
+# NOTES
+# When run for the first time <b>2fa-svc-mng</b> executes <b>2fa-register</b>.
+# If <b>2fa-register</b> does not complete successfully <b>2fa-svc-mng</b> will fail
+# If <b>2fa-register</b> completes successfully it will no longer be called by
+# <b>2fa-svc-mng</b>
+
+# SEE ALSO
+# <b>2fa-register</b>
+
+# CODE
+
+
+#fg_black="$(tput setaf 0)"
+fg_red="$(tput setaf 1)"
+fg_green="$(tput setaf 2)"
+fg_yellow="$(tput setaf 3)"
+#fg_blue="$(tput setaf 4)"
+#fg_magenta="$(tput setaf 5)"
+fg_cyan="$(tput setaf 6)"
+#fg_white="$(tput setaf 7)"
+fg_reset="$(tput sgr0)"
+bold="$(tput bold)"
+
+if [[ "$1" = "-h" || "$1" = "--help" ]]; then
+    display-help "$0"
+    exit 0
+fi
+
+# make sure this script is not running elsewhere
+procs="$(ps -u)"
+ps_cnt="$(echo "$procs"| grep '/bin/bash /usr/local/bin/2fa-svc-mng' |grep -c -v grep)"
+if [ "$ps_cnt" -gt 1 ]; then
+    echo "${bold}${fg_red}ABORT: ${fg_cyan}You are already executing this script.${fg_reset}"
+    exit 1
+fi
+
+if [ ! -f "$HOME"/.2fa-services ]; then
+    echo "${bold}${fg_yellow}WARNING:${fg_cyan} ${HOME}/.2fa-services file not found."
+    echo "All services will be reset to no 2FA'.${fg_reset}"
+    touch "${HOME}/.2fa-services"
+fi
+
+# check user has a .google_authenticator file
+# (i.e. has run 2fa-register)
+if [ ! -s "$HOME/.google_authenticator" ]; then
+    # if not run 2fa-register
+    echo "${bold}${fg_cyan}Executing '2fa-register' as it needs to complete successfully first.${fg_reset}"
+    echo
+    # if 2fa-register failed carrying on would be dangerous
+    if ! 2fa-register; then 
+        echo 
+        exit 1
+    fi
+fi
+
+# check user is being watched by 2fa-svc.service
+if ! grep -q "${HOME}/.2fa-services" /etc/2fa/user-svc-files; then
+    # if not, but user can sudo then add their own entry entry
+
+    # otherwise abort with error message
+    echo "${bold}${fg_red}ABORT: ${fg_cyan}No ${HOME}/.2fa-services entry in /etc/2fa/user-svc-files"
+    echo "Contact a system administrator to have this included${fg_reset}"
+    exit 1
+fi
+
+echo
+echo "${fg_cyan}${bold}2FA Service management (2fa-svc-mng)"
+echo "------------------------------------${fg_reset}"
+echo
+
+cp "$HOME"/.2fa-services "$HOME"/.2fa-services.tmp
+modify='false'
+
+# for un-enforced services
+while read -r service
+do
+    # skip if service is enforced
+    if ! grep -qw "$service" /etc/2fa/enforced; then
+        # skip if service is sudo and user is not in sudo group
+        if ! ([[ "$service" = 'sudo' ]] && ! groups|grep -qw 'sudo'); then
+            # if service currently disabled
+            if ! grep -qw "$service" "$HOME"/.2fa-services.tmp; then
+                echo "2fa is ${bold}DISABLED${fg_reset} for $service"
+                read -r -p "${bold}${fg_green}Do you want 2fa ENABLED for ${service}? [Y/n] ${fg_reset}" response < /dev/tty
+                if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
+                    echo "$service" >> "$HOME"/.2fa-services.tmp 
+                    modify='true'
+                    # if enabling sudo need to enable password for sudo
+                    if [ "$service" = 'sudo' ]; then
+                        # if user has active entry in /etc/sudoers.d/010_pi-nopasswd i.e.0FA
+                        if sudo grep -qw "$USER" /etc/sudoers.d/010_pi-nopasswd; then
+                            # comment it out tp enable password
+                            sudo spsc "$USER" enable
+                            if [ $? -eq 1 ]; then
+                                # reverse change
+                                echo "reverting"
+                                sed -i "/$service/d" "$HOME"/.2fa-services.tmp
+                            fi
+                        fi
+                    fi
+                    echo "Done"
+                fi
+            # service currently enabled
+            else
+                echo "2fa is ${bold}ENABLED${fg_reset} for $service"
+                read -r -p "${bold}${fg_green}Do you want 2fa DISABLED for ${service}? [Y/n] ${fg_reset}" response  < /dev/tty
+                if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
+                    sed -i "/^$service\$/d" "$HOME"/.2fa-services.tmp
+                    modify='true'
+                    if [ "$service" = 'sudo' ]; then
+                        # if user has commented entry in /etc/sudoers.d/010_pi-nopasswd
+                        # i.e. was previously 0FA 
+                        if sudo grep -qw "#$USER" /etc/sudoers.d/010_pi-nopasswd; then
+                            # the restore 0FA by removing comment
+                            echo "${bold}${fg_cyan}Reverting to previous 0FA for sudo.${fg_reset}"
+                            if ! sudo spsc "$USER" disable; then
+                                echo "Error - reverting"
+                                echo "$service" >> "$HOME"/.2fa-services.tmp
+                            fi
+                        fi
+                    fi
+                    echo "Done"
+                fi
+            fi
+        fi
+        echo
+    fi
+done < /etc/2fa/services
+
+while read -r service
+do
+    echo "2fa is administratively ENFORCED for $service"
+done < /etc/2fa/enforced
+
+if [ $modify == 'true' ]; then
+    cp "$HOME"/.2fa-services.tmp "$HOME"/.2fa-services
+    sleep 2
+fi
+rm "$HOME"/.2fa-services.tmp
